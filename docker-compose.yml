@@ -1,0 +1,28 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: assay
+      POSTGRES_USER: assay
+      POSTGRES_PASSWORD: assay
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U assay"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  server:
+    build: .
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://assay:assay@db:5432/assay
+      JWT_SECRET: change-me-in-prod
+      PORT: "8001"
+      PUBLIC_BASE_URL: http://localhost:8001
+    ports:
+      - "8001:8001"
+    depends_on:
+      db:
+        condition: service_healthy

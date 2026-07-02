@@ -1,0 +1,85 @@
+-- Assay schema (M1). Idempotent: safe to run repeatedly.
+-- Multi-tenancy in M1 is enforced in application queries (every row scoped by
+-- user_id). When this moves onto InsForge Postgres, the same columns back RLS
+-- policies; the app-level checks stay as defense in depth.
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE TABLE IF NOT EXISTS users (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email         TEXT NOT NULL UNIQUE,
+  name          TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- A project is a target the owner has registered. It cannot be probed until
+-- ownership is verified (verified_at IS NOT NULL). This is the consent pillar:
+-- no probe job is ever created for an unverified project.
+CREATE TABLE IF NOT EXISTS projects (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name             TEXT NOT NULL,
+  target_url       TEXT NOT NULL,
+  target_host      TEXT NOT NULL,
+  verify_token     TEXT NOT NULL,
+  verify_method    TEXT,                       -- 'http' | 'dns' once verified
+  verified_at      TIMESTAMPTZ,
+  -- Declared API contract checked on each probe: array of
+  -- { method, path, expectStatus, expectJsonKeys? }.
+  endpoint_spec    JSONB NOT NULL DEFAULT '[]'::jsonb,
+  probe_interval_s INTEGER NOT NULL DEFAULT 300,
+  paused           BOOLEAN NOT NULL DEFAULT false,   -- emergency stop
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id);
+
+-- Durable job queue. Claimed atomically with SELECT ... FOR UPDATE SKIP LOCKED
+-- so any number of worker processes can share the table without double-running
+-- a job. This is the SQL twin of Pulse's atomic Mongo claim.
+CREATE TABLE IF NOT EXISTS jobs (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id  UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  type        TEXT NOT NULL,                   -- 'probe' in M1
+  status      TEXT NOT NULL DEFAULT 'pending', -- pending | running | done | failed
+  run_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  locked_by   TEXT,
+  locked_at   TIMESTAMPTZ,
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  last_error  TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Partial index over exactly the rows the claimer scans: due & runnable.
+CREATE INDEX IF NOT EXISTS idx_jobs_claimable
+  ON jobs(run_at)
+  WHERE status IN ('pending', 'running');
+
+-- One row per executed probe.
+CREATE TABLE IF NOT EXISTS probes (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id          UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  ok                  BOOLEAN NOT NULL,
+  status_code         INTEGER,
+  latency_ms          INTEGER,
+  error               TEXT,
+  contract_ok         BOOLEAN NOT NULL DEFAULT true,
+  contract_violations JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_probes_project_time ON probes(project_id, created_at DESC);
+
+-- Signed, publicly shareable report snapshots.
+CREATE TABLE IF NOT EXISTS reports (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id    UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  public_id     TEXT NOT NULL UNIQUE,
+  payload       JSONB NOT NULL,
+  signature     TEXT NOT NULL,   -- base64 Ed25519 signature over canonical payload
+  public_key    TEXT NOT NULL,   -- base64 raw Ed25519 public key used to sign
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_reports_project ON reports(project_id);

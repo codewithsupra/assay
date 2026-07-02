@@ -2,6 +2,9 @@ import crypto from 'node:crypto';
 import { pool, query } from '../config/db.js';
 import { env } from '../config/env.js';
 import { runProbe } from './probe.js';
+import { runLoadCampaign, summarizeResult } from './load-runner.js';
+import * as campaigns from './campaigns.js';
+import { publish } from './pubsub.js';
 
 // The orchestrator core.
 //
@@ -13,8 +16,10 @@ import { runProbe } from './probe.js';
 
 const WORKER_ID = `${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
 
-// Claim up to `limit` due jobs atomically and mark them running.
-export async function claimJobs(limit = 5, client = pool) {
+// Claim up to `limit` due jobs of the given types atomically and mark them
+// running. `types` lets the API process and the load-runner process share one
+// table while each only ever claims the kind of job it knows how to run.
+export async function claimJobs(limit = 5, types = ['probe', 'load_campaign'], client = pool) {
   const { rows } = await client.query(
     `UPDATE jobs
         SET status = 'running',
@@ -24,6 +29,7 @@ export async function claimJobs(limit = 5, client = pool) {
       WHERE id IN (
         SELECT id FROM jobs
          WHERE run_at <= now()
+           AND type = ANY($4::text[])
            AND (
              status = 'pending'
              OR (status = 'running' AND locked_at < now() - ($2::int * interval '1 millisecond'))
@@ -33,7 +39,7 @@ export async function claimJobs(limit = 5, client = pool) {
          LIMIT $3
       )
       RETURNING id, project_id, type`,
-    [WORKER_ID, env.JOB_LEASE_MS, limit]
+    [WORKER_ID, env.JOB_LEASE_MS, limit, types]
   );
   return rows;
 }
@@ -77,15 +83,7 @@ async function reschedule(jobId, intervalSeconds) {
   );
 }
 
-export async function processJob(job) {
-  const project = await loadProject(job.project_id);
-  // Consent + lifecycle guards: never probe an unverified or paused project,
-  // even if a stale job exists. Such jobs are retired, not run.
-  if (!project || !project.verified_at || project.paused) {
-    await query(`UPDATE jobs SET status = 'done', locked_by = NULL WHERE id = $1`, [job.id]);
-    return { skipped: true };
-  }
-
+async function processProbeJob(job, project) {
   try {
     const result = await runProbe(project);
     await recordProbe(project.id, result);
@@ -102,9 +100,68 @@ export async function processJob(job) {
   }
 }
 
+// Run one load campaign: claim the queued campaign row for this project,
+// stream tick progress over the pubsub channel, persist the final (or
+// error-budget-aborted) result, and retire the job -- campaigns are one-shot,
+// never rescheduled.
+async function processLoadCampaignJob(job, project) {
+  const campaign = await campaigns.claimCampaignForJob(project.id);
+  if (!campaign) {
+    await query(`UPDATE jobs SET status = 'done', locked_by = NULL WHERE id = $1`, [job.id]);
+    return { skipped: true };
+  }
+
+  await campaigns.markRunning(campaign.id);
+  await publish({ type: 'campaign:started', projectId: project.id, campaignId: campaign.id });
+
+  try {
+    const { result, aborted } = await runLoadCampaign({
+      url: project.target_url,
+      connections: campaign.connections,
+      durationS: campaign.duration_s,
+      pipelining: campaign.pipelining,
+      onTick: (sample) => {
+        publish({ type: 'campaign:progress', projectId: project.id, campaignId: campaign.id, sample });
+      },
+    });
+
+    const summary = summarizeResult(result);
+    if (aborted) {
+      await campaigns.markAborted(campaign.id, 'error budget exceeded', summary);
+      await publish({ type: 'campaign:aborted', projectId: project.id, campaignId: campaign.id, summary });
+    } else {
+      await campaigns.markDone(campaign.id, summary);
+      await publish({ type: 'campaign:done', projectId: project.id, campaignId: campaign.id, summary });
+    }
+    await query(`UPDATE jobs SET status = 'done', locked_by = NULL WHERE id = $1`, [job.id]);
+    return { ok: true, campaignId: campaign.id };
+  } catch (err) {
+    await campaigns.markFailed(campaign.id, err.message);
+    await publish({ type: 'campaign:failed', projectId: project.id, campaignId: campaign.id, error: err.message });
+    await query(`UPDATE jobs SET status = 'done', locked_by = NULL, last_error = $2 WHERE id = $1`, [
+      job.id,
+      err.message,
+    ]);
+    return { error: err.message };
+  }
+}
+
+export async function processJob(job) {
+  const project = await loadProject(job.project_id);
+  // Consent + lifecycle guards: never act on an unverified or paused project,
+  // even if a stale job exists. Such jobs are retired, not run.
+  if (!project || !project.verified_at || project.paused) {
+    await query(`UPDATE jobs SET status = 'done', locked_by = NULL WHERE id = $1`, [job.id]);
+    return { skipped: true };
+  }
+
+  if (job.type === 'load_campaign') return processLoadCampaignJob(job, project);
+  return processProbeJob(job, project);
+}
+
 // One scheduler tick: claim a batch and process it. Returns count processed.
-export async function tick(batchSize = 5) {
-  const jobs = await claimJobs(batchSize);
+export async function tick(batchSize = 5, types = ['probe', 'load_campaign']) {
+  const jobs = await claimJobs(batchSize, types);
   for (const job of jobs) {
     await processJob(job);
   }
@@ -113,17 +170,20 @@ export async function tick(batchSize = 5) {
 
 let timer = null;
 
-export function startScheduler({ intervalMs = 5000, batchSize = 5 } = {}) {
+// `types` lets a process opt into only the job kinds it's built to run --
+// the API process schedules probes only; the standalone runner (src/runner.js)
+// schedules load_campaign only.
+export function startScheduler({ intervalMs = 5000, batchSize = 5, types = ['probe', 'load_campaign'] } = {}) {
   if (timer) return;
   const loop = async () => {
     try {
-      await tick(batchSize);
+      await tick(batchSize, types);
     } catch (err) {
       console.error('[scheduler] tick error:', err.message);
     }
   };
   timer = setInterval(loop, intervalMs);
-  console.log(`[scheduler] started (worker ${WORKER_ID}, every ${intervalMs}ms)`);
+  console.log(`[scheduler] started (worker ${WORKER_ID}, types=${types.join(',')}, every ${intervalMs}ms)`);
 }
 
 export function stopScheduler() {

@@ -17,14 +17,15 @@ export const publicReportJson = asyncHandler(async (req, res) => {
   });
 });
 
-// SVG badge (Verified: 99.97% uptime · p95 142ms). Embeddable in a README.
+// SVG badge (Verified: 300 req/s · p99 142ms · 99.97% up). Embeddable in a README.
 export const reportBadge = asyncHandler(async (req, res) => {
   const report = await getReportByPublicId(req.params.publicId);
   if (!report) throw new ApiError(404, 'report not found');
-  const s = report.payload.summary;
+  const { summary: s, load } = report.payload;
   const label = 'Assay verified';
-  const value =
-    s.uptime_pct != null
+  const value = load
+    ? `${load.rps_sustained} req/s · p99 ${load.latency_p99_ms}ms · ${s.uptime_pct ?? '—'}% up`
+    : s.uptime_pct != null
       ? `${s.uptime_pct}% up · p95 ${s.p95_latency_ms ?? '—'}ms`
       : 'pending';
   const valueWidth = 8 + value.length * 6.5;
@@ -49,7 +50,16 @@ export const publicReportPage = asyncHandler(async (req, res) => {
   if (!report) return res.status(404).send('<h1>Report not found</h1>');
   const { payload } = report;
   const s = payload.summary;
+  const load = payload.load;
   const valid = verifyReport(payload, report.signature, report.public_key);
+  const loadCard = load
+    ? `<div class="card grid">
+    <div><div class="label">Sustained RPS</div><div class="metric">${load.rps_sustained}</div></div>
+    <div><div class="label">p99 load latency</div><div class="metric">${load.latency_p99_ms} ms</div></div>
+    <div><div class="label">Load errors</div><div class="metric">${load.errors + load.timeouts}</div></div>
+    <div><div class="label">Campaign duration</div><div class="metric">${load.duration_s}s @ ${load.connections}c</div></div>
+  </div>`
+    : '';
   res.set('Content-Type', 'text/html');
   res.send(`<!doctype html><html><head><meta charset="utf-8">
 <title>Assay report · ${payload.project.name}</title>
@@ -73,6 +83,7 @@ export const publicReportPage = asyncHandler(async (req, res) => {
     <div><div class="label">Contract violations</div><div class="metric">${s.contract_violations}</div></div>
     <div><div class="label">Probes (${s.window_hours}h)</div><div class="metric">${s.total_probes}</div></div>
   </div>
+  ${loadCard}
   <div class="card">
     <div class="label">Signature (Ed25519)</div>
     <p class="${valid ? 'ok' : 'bad'}">${valid ? '✓ Signature valid — this report is tamper-evident' : '✗ Signature INVALID'}</p>

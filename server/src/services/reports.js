@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { query } from '../config/db.js';
 import { signReport } from './signing.js';
+import { latestCompletedCampaign } from './campaigns.js';
 
 // Aggregate a project's probe history over a window into a summary, then sign
 // it. Uptime %, p95 latency, and contract-violation counts are computed in SQL
@@ -37,6 +38,16 @@ export async function buildSummary(projectId, windowHours = 24 * 7) {
 
 export async function generateReport(project, windowHours = 24 * 7) {
   const summary = await buildSummary(project.id, windowHours);
+  // The load-campaign numbers, if any exist, are what turn "up" into
+  // "sustained N req/s" -- the README money-shot line.
+  const campaign = await latestCompletedCampaign(project.id);
+  const load = campaign
+    ? {
+        campaign_id: campaign.id,
+        ran_at: campaign.finished_at,
+        ...campaign.result,
+      }
+    : null;
   const publicId = crypto.randomBytes(9).toString('base64url');
   // Normalize through JSON so the exact bytes we sign are the exact bytes we
   // store (JSONB turns Date columns into strings on read; sign the same form).
@@ -44,6 +55,7 @@ export async function generateReport(project, windowHours = 24 * 7) {
     JSON.stringify({
       project: { id: project.id, name: project.name, target_url: project.target_url },
       summary,
+      load,
       issued_at: new Date().toISOString(),
       public_id: publicId,
     })

@@ -26,6 +26,13 @@ export const env = {
   PROBE_TIMEOUT_MS: parseInt(process.env.PROBE_TIMEOUT_MS || '10000', 10),
   MIN_PROBE_INTERVAL_S: parseInt(process.env.MIN_PROBE_INTERVAL_S || '30', 10),
   PUBLIC_BASE_URL: process.env.PUBLIC_BASE_URL || 'http://localhost:8001',
+
+  // Load-campaign guardrails (M2). Hard caps, not suggestions: this is the
+  // difference between a load tester and a DDoS cannon. Raised per-plan later.
+  MAX_CAMPAIGN_CONNECTIONS: parseInt(process.env.MAX_CAMPAIGN_CONNECTIONS || '50', 10),
+  MAX_CAMPAIGN_DURATION_S: parseInt(process.env.MAX_CAMPAIGN_DURATION_S || '30', 10),
+  CAMPAIGN_COOLDOWN_S: parseInt(process.env.CAMPAIGN_COOLDOWN_S || '300', 10),
+  CAMPAIGN_ERROR_BUDGET_PCT: parseFloat(process.env.CAMPAIGN_ERROR_BUDGET_PCT || '20'),
 };
 
 if (env.NODE_ENV === 'production') {

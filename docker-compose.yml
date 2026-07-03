@@ -26,3 +26,13 @@ services:
     depends_on:
       db:
         condition: service_healthy
+
+  runner:
+    build: .
+    command: ["node", "src/runner.js"]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://assay:assay@db:5432/assay
+    depends_on:
+      db:
+        condition: service_healthy

@@ -36,6 +36,10 @@ Browser ── REST + Socket.io ─▶ API process ──▶ Postgres (users, pr
                                                                                 (separate OS process)
 ```
 
+## Frontend
+
+A React + Tailwind SPA (`client/`) with a forge/ember dark theme: a canvas-based rising-embers hero, glass-card dashboard, live campaign progress over the same Socket.io channel the API relays, and a signed public report page restyled to match. In production the Dockerfile builds the SPA and the Express server serves it directly (`express.static` + SPA fallback) — one process, one URL, no CORS to manage.
+
 ## Status — M1 + M2 shipped
 
 **M1 (Verify & watch):** auth, project registration, ownership verification, uptime + contract probes, atomic scheduler, signed public report page + badge.
@@ -64,14 +68,28 @@ node scripts/seed-demo.js   # prints a public report URL, e.g. /r/<id>
 ```
 
 ```bash
-npm test               # 18 integration tests against a real local Postgres
+cd client
+npm install
+npm run dev             # SPA on :5173, proxies /api, /socket.io, /r to :8001
 ```
-
-Docker (Postgres + server in one command; runs the API process only — add a second service block pointed at `node src/runner.js` for the runner fleet):
 
 ```bash
-docker compose up --build   # http://localhost:8001/health
+npm test                # 18 integration tests against a real local Postgres (run from server/)
 ```
+
+Docker (Postgres + web + runner in one command — the Dockerfile builds the client and bundles it into the web service):
+
+```bash
+docker compose up --build   # http://localhost:8001
+```
+
+## Deploy
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/codewithsupra/assay)
+
+1. Click **Deploy to Render** above (or *New + → Blueprint*, connect this repo — Render reads [`render.yaml`](render.yaml) automatically). It provisions a free Postgres database, the web service (API + SPA), and the `assay-runner` worker in one blueprint.
+2. Once the web service has a URL, set its `PUBLIC_BASE_URL` env var to that URL and redeploy — signed reports embed this in their public links and badges.
+3. (Optional) Set `SIGNING_KEY_PEM` to a stable Ed25519 private key (PKCS#8 PEM) so Assay's signing identity survives restarts; without it, a fresh key is generated on boot and old reports still verify fine (each report carries its own public key), it's just a new "voice" each restart.
 
 ## API
 
@@ -102,4 +120,6 @@ server-side); server emits campaign:started / campaign:progress / campaign:done 
 
 ## Stack
 
-Node.js · Express · PostgreSQL (`pg`, `SELECT ... FOR UPDATE SKIP LOCKED`, `LISTEN`/`NOTIFY`) · `autocannon` · Socket.io · Ed25519 (`node:crypto`) · JWT · bcrypt · Jest/Supertest · Docker. Deploy target: InsForge (auth/Postgres/RLS) + a small paid runner box for credible load numbers at scale.
+**Backend:** Node.js · Express · PostgreSQL (`pg`, `SELECT ... FOR UPDATE SKIP LOCKED`, `LISTEN`/`NOTIFY`) · `autocannon` · Socket.io · Ed25519 (`node:crypto`) · JWT · bcrypt · Jest/Supertest · Docker.
+**Frontend:** React · React Router · Tailwind CSS v4 · Framer Motion · Socket.io client · Vite.
+**Deploy:** Render (Docker web service + worker + managed Postgres via `render.yaml` blueprint).

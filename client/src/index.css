@@ -1,0 +1,97 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Space Grotesk", "Inter", system-ui, sans-serif;
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  /* Forge palette: near-black charcoal ground, ember accent, emerald for verified/success. */
+  --color-void: #08070a;
+  --color-char-950: #0b0a0d;
+  --color-char-900: #121116;
+  --color-char-800: #18171d;
+  --color-char-700: #232129;
+  --color-char-600: #322f3a;
+  --color-ink-100: #f4f2f7;
+  --color-ink-300: #cac6d4;
+  --color-ink-500: #8d879b;
+  --color-ink-700: #5c5768;
+
+  --color-ember-400: #ffb86b;
+  --color-ember-500: #ff8a3d;
+  --color-ember-600: #ff5a2e;
+  --color-ember-700: #e63a1f;
+
+  --color-verified-400: #6ee7b7;
+  --color-verified-500: #34d399;
+  --color-verified-600: #10b981;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: var(--color-void);
+  color: var(--color-ink-100);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, .font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-ember-500) 35%, transparent);
+  color: var(--color-ink-100);
+}
+
+/* Ambient grain overlay -- a cheap trick that reads as "cinematic" rather than "flat SaaS gradient". */
+.grain::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 60;
+  opacity: 0.035;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.glass {
+  background: color-mix(in srgb, var(--color-char-800) 70%, transparent);
+  border: 1px solid color-mix(in srgb, white 8%, transparent);
+  backdrop-filter: blur(16px);
+}
+
+.text-gradient-ember {
+  background: linear-gradient(100deg, var(--color-ember-400), var(--color-ember-600) 60%, var(--color-ember-700));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.glow-ember {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-ember-500) 40%, transparent),
+    0 8px 40px -8px color-mix(in srgb, var(--color-ember-600) 55%, transparent);
+}
+
+@keyframes drift {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(2%, -3%, 0) scale(1.05); }
+}
+.animate-drift { animation: drift 18s ease-in-out infinite; }
+
+@keyframes rise {
+  0% { transform: translateY(0) scale(1); opacity: 0; }
+  10% { opacity: 1; }
+  100% { transform: translateY(-120vh) scale(0.4); opacity: 0; }
+}
+
+::-webkit-scrollbar { width: 10px; }
+::-webkit-scrollbar-track { background: var(--color-void); }
+::-webkit-scrollbar-thumb { background: var(--color-char-700); border-radius: 8px; }

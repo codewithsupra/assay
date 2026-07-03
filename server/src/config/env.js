@@ -26,6 +26,13 @@ export const env = {
   PROBE_TIMEOUT_MS: parseInt(process.env.PROBE_TIMEOUT_MS || '10000', 10),
   MIN_PROBE_INTERVAL_S: parseInt(process.env.MIN_PROBE_INTERVAL_S || '30', 10),
   PUBLIC_BASE_URL: process.env.PUBLIC_BASE_URL || 'http://localhost:8001',
+  // Which job types the API process's own scheduler polls. Defaults to
+  // 'probe' only -- load campaigns are meant to run on a separate runner
+  // process (src/runner.js) so sustained load generation never shares an
+  // event loop with request handling. Set to 'probe,load_campaign' to run
+  // both in one process, e.g. on a host/plan that can't run a second
+  // service (free-tier Render has no worker service type).
+  SCHEDULER_JOB_TYPES: (process.env.SCHEDULER_JOB_TYPES || 'probe').split(',').map((s) => s.trim()),
 
   // Load-campaign guardrails (M2). Hard caps, not suggestions: this is the
   // difference between a load tester and a DDoS cannon. Raised per-plan later.

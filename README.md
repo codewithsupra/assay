@@ -87,9 +87,11 @@ docker compose up --build   # http://localhost:8001
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/codewithsupra/assay)
 
-1. Click **Deploy to Render** above (or *New + → Blueprint*, connect this repo — Render reads [`render.yaml`](render.yaml) automatically). It provisions a free Postgres database, the web service (API + SPA), and the `assay-runner` worker in one blueprint.
+1. Click **Deploy to Render** above (or *New + → Blueprint*, connect this repo — Render reads [`render.yaml`](render.yaml) automatically). It provisions a free Postgres database and the web service (API + SPA) in one blueprint.
 2. Once the web service has a URL, set its `PUBLIC_BASE_URL` env var to that URL and redeploy — signed reports embed this in their public links and badges.
 3. (Optional) Set `SIGNING_KEY_PEM` to a stable Ed25519 private key (PKCS#8 PEM) so Assay's signing identity survives restarts; without it, a fresh key is generated on boot and old reports still verify fine (each report carries its own public key), it's just a new "voice" each restart.
+
+**Free-tier note:** Render's free plan has no `worker` service type, so there's no free way to run `src/runner.js` as the separate process the architecture calls for. The blueprint works around this with `SCHEDULER_JOB_TYPES=probe,load_campaign`, which makes the one web service poll both job types — load campaigns briefly share the request-serving event loop, the tradeoff the runner-fleet design exists to avoid. On a paid plan, add a `type: worker` service running `node src/runner.js` to `render.yaml` and drop `load_campaign` from that env var to restore the real separation.
 
 ## API
 
@@ -122,4 +124,4 @@ server-side); server emits campaign:started / campaign:progress / campaign:done 
 
 **Backend:** Node.js · Express · PostgreSQL (`pg`, `SELECT ... FOR UPDATE SKIP LOCKED`, `LISTEN`/`NOTIFY`) · `autocannon` · Socket.io · Ed25519 (`node:crypto`) · JWT · bcrypt · Jest/Supertest · Docker.
 **Frontend:** React · React Router · Tailwind CSS v4 · Framer Motion · Socket.io client · Vite.
-**Deploy:** Render (Docker web service + worker + managed Postgres via `render.yaml` blueprint).
+**Deploy:** Render (Docker web service + managed Postgres via `render.yaml` blueprint; separate `worker` service for the runner requires a paid plan — see Deploy section).
